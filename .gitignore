@@ -1,3 +1,7 @@
 .env
 node_modules/
 service-account-file.json
+fitnessapp-*.json
+*.pem
+*.key
+*.p12
