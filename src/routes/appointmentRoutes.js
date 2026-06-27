@@ -37,19 +37,27 @@ router.post("/", verifyToken, async (req, res) => {
       };
 
       if (guest_id) {
-          const userPackageRef = db.collection("userPackages").doc(guest_id);
-          const userPackageDoc = await userPackageRef.get();
+          const packagesSnapshot = await db.collection("userPackages").doc(guest_id)
+              .collection("packages")
+              .get();
 
-          if (userPackageDoc.exists) {
-              const userPackages = userPackageDoc.data().packages || [];
+          if (!packagesSnapshot.empty) {
+              const now = new Date();
+              let activePackage = null;
 
-              // 🔹 Először keressünk olyan aktív bérletet, amelynek van fennmaradó alkalma
-              let activePackage = userPackages.find(pkg => pkg.remainingSessions > 0);
+              packagesSnapshot.forEach(doc => {
+                  if (activePackage) return;
+                  const pkg = doc.data();
+                  const endDate = pkg.endDate ? pkg.endDate.toDate() : null;
+                  const isUnlimited = pkg.packageId === "unlimited";
+                  const isValid = !endDate || endDate > now;
 
-              // 🔹 Ha nincs ilyen, de van "unlimited" bérlet, akkor azt használjuk
-              if (!activePackage) {
-                  activePackage = userPackages.find(pkg => pkg.packageId === "unlimited");
-              }
+                  if (isUnlimited && isValid) {
+                      activePackage = pkg;
+                  } else if (!isUnlimited && isValid && pkg.remainingSessions > 0) {
+                      activePackage = pkg;
+                  }
+              });
 
               if (activePackage) {
                   newAppointment.packageId = activePackage.id;
@@ -66,25 +74,33 @@ router.post("/", verifyToken, async (req, res) => {
     }
   });
 
-router.get("/:userId", async (req, res) => {
+router.get("/:userId", verifyToken, async (req, res) => {
   try {
-    const userId = req.params.userId;
-    const snapshot = await db.collection("appointments").where("user_id", "==", userId).get();
+    const { from, to } = req.query;
+
+    let query = db.collection("appointments").where("user_id", "==", req.userId);
+
+    if (from) query = query.where("date", ">=", from);
+    if (to)   query = query.where("date", "<=", to);
+
+    query = query.orderBy("date", "asc");
+
+    const snapshot = await query.get();
 
     const appointments = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          appointments.push({
-            id: doc.id,
-            user_id: data.user_id,
-            guest_id: data.guest_id || null,
-            client_name: data.client_name,
-            date: data.date,
-            notes: data.notes,
-            attended: data.hasOwnProperty("attended") ? data.attended : false,
-            packageId: data.packageId || null
-          });
-        });
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      appointments.push({
+        id: doc.id,
+        user_id: data.user_id,
+        guest_id: data.guest_id || null,
+        client_name: data.client_name,
+        date: data.date,
+        notes: data.notes,
+        attended: data.hasOwnProperty("attended") ? data.attended : false,
+        packageId: data.packageId || null
+      });
+    });
 
     res.json(appointments);
   } catch (error) {
@@ -140,19 +156,6 @@ router.delete("/:id", verifyToken, async (req, res) => {
     if (doc.data().user_id !== req.userId) {
       return res.status(403).json({ error: "Unauthorized to delete this appointment" });
     }
-
-    const guestId = doc.data().guest_id;
-
-        if (guestId) {
-          const guestRef = db.collection("guests").doc(guestId);
-          const guestDoc = await guestRef.get();
-
-          if (guestDoc.exists) {
-            let appointments = guestDoc.data().appointments || [];
-            appointments = appointments.filter(date => date !== doc.data().date);
-            await guestRef.update({ appointments });
-          }
-        }
 
     await appointmentRef.delete();
     res.json({ message: "Appointment deleted successfully" });

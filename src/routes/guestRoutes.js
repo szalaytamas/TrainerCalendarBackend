@@ -104,32 +104,6 @@ router.post("/", verifyToken, async (req, res) => {
   }
 });
 
-router.post("/:guestId/appointments", verifyToken, async (req, res) => {
-    try {
-        const { guestId } = req.params;
-        const { date } = req.body;
-
-        if (!date) {
-            return res.status(400).json({ error: "Missing appointment date" });
-        }
-
-        const guestRef = db.collection("guests").doc(guestId);
-        const doc = await guestRef.get();
-
-        if (!doc.exists) {
-            return res.status(404).json({ error: "Guest not found" });
-        }
-
-        await guestRef.update({
-            appointments: admin.firestore.FieldValue.arrayUnion(date)
-        });
-
-        res.json({ message: "Appointment added to guest successfully" });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
 router.get("/:guestId/appointments", verifyToken, async (req, res) => {
     try {
         const guestId = req.params.guestId;
@@ -140,74 +114,26 @@ router.get("/:guestId/appointments", verifyToken, async (req, res) => {
             return res.status(404).json({ error: "Guest not found" });
         }
 
-        const guestData = doc.data();
-        const appointments = guestData.appointments || [];
+        if (doc.data().user_id !== req.userId) {
+            return res.status(403).json({ error: "Unauthorized" });
+        }
+
+        const snapshot = await db.collection("appointments")
+            .where("guest_id", "==", guestId)
+            .get();
+
+        const appointments = [];
+        snapshot.forEach(doc => {
+            appointments.push({ id: doc.id, ...doc.data() });
+        });
+
+        appointments.sort((a, b) => a.date.localeCompare(b.date));
 
         res.json({
-            guestId: guestId,
-            guestName: guestData.name,
-            appointments: appointments.map(date => ({
-                date: date,
-                notes: guestData.notes || ""
-            }))
+            guestId,
+            guestName: doc.data().name,
+            appointments
         });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.put("/:guestId/update-appointment", verifyToken, async (req, res) => {
-    try {
-        const { guestId } = req.params;
-        const { oldDate, newDate } = req.body;
-
-        if (!oldDate || !newDate) {
-            return res.status(400).json({ error: "Missing old or new appointment date" });
-        }
-
-        const guestRef = db.collection("guests").doc(guestId);
-        const doc = await guestRef.get();
-
-        if (!doc.exists) {
-            return res.status(404).json({ error: "Guest not found" });
-        }
-
-        let appointments = doc.data().appointments || [];
-
-        appointments = appointments.filter(date => date !== oldDate);
-        appointments.push(newDate);
-
-        await guestRef.update({ appointments });
-
-        res.json({ message: "Guest appointment updated successfully" });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-router.put("/:guestId/remove-appointment", verifyToken, async (req, res) => {
-    try {
-        const { guestId } = req.params;
-        const { date } = req.body;
-
-        if (!date) {
-            return res.status(400).json({ error: "Missing appointment date" });
-        }
-
-        const guestRef = db.collection("guests").doc(guestId);
-        const doc = await guestRef.get();
-
-        if (!doc.exists) {
-            return res.status(404).json({ error: "Guest not found" });
-        }
-
-        let appointments = doc.data().appointments || [];
-
-        appointments = appointments.filter(d => d !== date);
-
-        await guestRef.update({ appointments });
-
-        res.json({ message: "Guest appointment removed successfully" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
